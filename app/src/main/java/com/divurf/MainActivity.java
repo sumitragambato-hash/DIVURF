@@ -19,6 +19,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
@@ -155,7 +156,6 @@ public class MainActivity extends AppCompatActivity {
             String dbActual = prefs.getString("usuarios", "[]");
             JSONArray array = new JSONArray(dbActual);
             
-            // Generar vector geométrico relativo
             Rect box = rostroActual.getBoundingBox();
             double ratio = (double) box.width() / box.height();
 
@@ -198,7 +198,6 @@ public class MainActivity extends AppCompatActivity {
                         .build();
 
                 imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor(), imageProxy -> {
-                    @SuppressWarnings("unsafe")
                     android.media.Image mediaImage = imageProxy.getImage();
                     if (mediaImage != null) {
                         InputImage image = InputImage.fromMediaImage(mediaImage, imageProxy.getImageInfo().getRotationDegrees());
@@ -213,6 +212,7 @@ public class MainActivity extends AppCompatActivity {
                                         rostroActual = null;
                                     }
                                 })
+                                .addOnFailureListener(e -> e.printStackTrace())
                                 .addOnCompleteListener(task -> imageProxy.close());
                     } else {
                         imageProxy.close();
@@ -247,7 +247,6 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject mejorCoincidencia = null;
                 double menorDiferencia = Double.MAX_VALUE;
 
-                // Recorrer todos los rostros almacenados en la tablet
                 for (int i = 0; i < array.length(); i++) {
                     JSONObject obj = array.getJSONObject(i);
                     double ratioGuardado = obj.getDouble("ratio");
