@@ -1,4 +1,4 @@
-package com.divurf;
+package com.example.divurf;
 
 import android.Manifest;
 import android.content.Context;
