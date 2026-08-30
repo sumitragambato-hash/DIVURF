@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.PointF;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.view.View;
@@ -19,7 +20,6 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
-import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
@@ -28,9 +28,11 @@ import androidx.core.content.ContextCompat;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.face.Face;
+import com.google.mlkit.vision.face.FaceContour;
 import com.google.mlkit.vision.face.FaceDetection;
 import com.google.mlkit.vision.face.FaceDetector;
 import com.google.mlkit.vision.face.FaceDetectorOptions;
+import com.google.mlkit.vision.face.FaceLandmark;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.concurrent.ExecutionException;
@@ -137,6 +139,45 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private double[] extraerFirmaFacial(Face face) {
+        Rect box = face.getBoundingBox();
+        float anchoBox = Math.max(box.width(), 1f);
+        float altoBox = Math.max(box.height(), 1f);
+
+        double distanciaOjosNorm = 0.5;
+        double narizOjoIzqNorm = 0.3;
+        double narizOjoDerNorm = 0.3;
+
+        FaceLandmark ojoIzq = face.getLandmark(FaceLandmark.LEFT_EYE);
+        FaceLandmark ojoDer = face.getLandmark(FaceLandmark.RIGHT_EYE);
+        FaceLandmark nariz = face.getLandmark(FaceLandmark.NOSE_BASE);
+
+        if (ojoIzq != null && ojoDer != null) {
+            float distOjos = (float) Math.hypot(
+                    ojoDer.getPosition().x - ojoIzq.getPosition().x,
+                    ojoDer.getPosition().y - ojoIzq.getPosition().y
+            );
+            distanciaOjosNorm = distOjos / anchoBox;
+        }
+
+        if (nariz != null && ojoIzq != null && ojoDer != null) {
+            float distN1 = (float) Math.hypot(
+                    nariz.getPosition().x - ojoIzq.getPosition().x,
+                    nariz.getPosition().y - ojoIzq.getPosition().y
+            );
+            float distN2 = (float) Math.hypot(
+                    nariz.getPosition().x - ojoDer.getPosition().x,
+                    nariz.getPosition().y - ojoDer.getPosition().y
+            );
+            narizOjoIzqNorm = distN1 / altoBox;
+            narizOjoDerNorm = distN2 / altoBox;
+        }
+
+        double ratioCaja = (double) box.width() / box.height();
+
+        return new double[]{distanciaOjosNorm, narizOjoIzqNorm, narizOjoDerNorm, ratioCaja};
+    }
+
     private void guardarPersona() {
         String nombre = inputNombre.getText().toString().trim();
         String cedula = inputCedula.getText().toString().trim();
@@ -156,19 +197,21 @@ public class MainActivity extends AppCompatActivity {
             String dbActual = prefs.getString("usuarios", "[]");
             JSONArray array = new JSONArray(dbActual);
             
-            Rect box = rostroActual.getBoundingBox();
-            double ratio = (double) box.width() / box.height();
+            double[] firma = extraerFirmaFacial(rostroActual);
 
             JSONObject nuevoRostro = new JSONObject();
             nuevoRostro.put("nombre", nombre);
             nuevoRostro.put("cedula", cedula);
             nuevoRostro.put("estado", estado);
-            nuevoRostro.put("ratio", ratio);
+            nuevoRostro.put("f0", firma[0]);
+            nuevoRostro.put("f1", firma[1]);
+            nuevoRostro.put("f2", firma[2]);
+            nuevoRostro.put("f3", firma[3]);
             
             array.put(nuevoRostro);
             prefs.edit().putString("usuarios", array.toString()).apply();
 
-            Toast.makeText(this, "Rostro de " + nombre + " registrado (Total: " + array.length() + ")", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Rostro de " + nombre + " registrado con alta precisión", Toast.LENGTH_LONG).show();
             inputNombre.setText("");
             inputCedula.setText("");
             cambiarModo(false);
@@ -188,8 +231,11 @@ public class MainActivity extends AppCompatActivity {
 
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
 
+                // Configuramos ML Kit con soporte de Landmarks para máxima precisión
                 FaceDetectorOptions options = new FaceDetectorOptions.Builder()
                         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
                         .build();
                 FaceDetector detector = FaceDetection.getClient(options);
 
@@ -241,16 +287,25 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
 
-                Rect box = face.getBoundingBox();
-                double ratioActual = (double) box.width() / box.height();
+                double[] firmaActual = extraerFirmaFacial(face);
 
                 JSONObject mejorCoincidencia = null;
                 double menorDiferencia = Double.MAX_VALUE;
 
                 for (int i = 0; i < array.length(); i++) {
                     JSONObject obj = array.getJSONObject(i);
-                    double ratioGuardado = obj.getDouble("ratio");
-                    double dif = Math.abs(ratioGuardado - ratioActual);
+                    double f0 = obj.getDouble("f0");
+                    double f1 = obj.getDouble("f1");
+                    double f2 = obj.getDouble("f2");
+                    double f3 = obj.getDouble("f3");
+
+                    // Distancia Euclidiana de los rasgos faciales
+                    double dif = Math.sqrt(
+                            Math.pow(f0 - firmaActual[0], 2) +
+                            Math.pow(f1 - firmaActual[1], 2) +
+                            Math.pow(f2 - firmaActual[2], 2) +
+                            Math.pow(f3 - firmaActual[3], 2)
+                    );
 
                     if (dif < menorDiferencia) {
                         menorDiferencia = dif;
@@ -258,7 +313,8 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
 
-                if (mejorCoincidencia != null) {
+                // Umbral de tolerancia estricto para evitar el loop
+                if (mejorCoincidencia != null && menorDiferencia < 0.35) {
                     String nombre = mejorCoincidencia.getString("nombre");
                     String cedula = mejorCoincidencia.getString("cedula");
                     String estado = mejorCoincidencia.getString("estado");
@@ -276,6 +332,12 @@ public class MainActivity extends AppCompatActivity {
                         txtAlertaTitulo.setText("Rostro Detectado: " + estado);
                         txtAlertaDetalle.setText("Nombre: " + nombre + "\nCédula: " + cedula);
                     }
+                } else {
+                    layoutAlerta.setBackgroundColor(Color.YELLOW);
+                    txtAlertaTitulo.setTextColor(Color.BLACK);
+                    txtAlertaDetalle.setTextColor(Color.BLACK);
+                    txtAlertaTitulo.setText("Buscando coincidencia...");
+                    txtAlertaDetalle.setText("Acérquese o mantenga el rostro fijo.");
                 }
 
             } catch (Exception e) {
