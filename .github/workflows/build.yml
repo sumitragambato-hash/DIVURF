@@ -19,8 +19,10 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Configurar Gradle
-      uses: gradle/actions/setup-gradle@v3
+    - name: Configurar Gradle 8.0
+      uses: gradle/gradle-build-action@v2
+      with:
+        gradle-version: '8.0'
 
     - name: Compilar APK
       run: gradle assembleDebug
