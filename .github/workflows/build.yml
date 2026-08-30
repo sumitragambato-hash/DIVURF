@@ -19,10 +19,13 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Compilar APK con Gradle Action
-      uses: eskatos/gradle-command-action@v2
+    - name: Instalar y configurar Gradle 8.0
+      uses: gradle/actions/setup-gradle@v3
       with:
-        arguments: assembleDebug
+        gradle-version: '8.0'
+
+    - name: Compilar APK
+      run: gradle assembleDebug
 
     - name: Subir APK como artefacto
       uses: actions/upload-artifact@v4
