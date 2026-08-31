@@ -56,9 +56,8 @@ public class MainActivity extends AppCompatActivity {
     private Face rostroActual = null;
     private Integer indiceEditando = null;
 
-    // SISTEMA DE HISTORIAL TEMPORAL PARA EVITAR Falsas Indecisiones (Filtro de suavizado)
     private final List<String> historialUltimosResultados = new ArrayList<>();
-    private static const int TAMAÑO_HISTORIAL = 3; // Requiere consistencia en 3 frames consecutivos
+    private static final int TAMAÑO_HISTORIAL = 3; 
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -92,7 +91,6 @@ public class MainActivity extends AppCompatActivity {
         previewView.setLayoutParams(camParams);
         rootLayout.addView(previewView);
 
-        // Formulario de Registro / Edición
         layoutRegistro = new LinearLayout(this);
         layoutRegistro.setOrientation(LinearLayout.VERTICAL);
         layoutRegistro.setVisibility(View.GONE);
@@ -117,7 +115,6 @@ public class MainActivity extends AppCompatActivity {
         layoutRegistro.addView(btnGuardar);
         rootLayout.addView(layoutRegistro);
 
-        // Display de Diagnóstico y Alertas
         layoutAlerta = new LinearLayout(this);
         layoutAlerta.setOrientation(LinearLayout.VERTICAL);
         layoutAlerta.setPadding(30, 30, 30, 30);
@@ -279,7 +276,7 @@ public class MainActivity extends AppCompatActivity {
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
 
                 FaceDetectorOptions options = new FaceDetectorOptions.Builder()
-                        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST) // Cambiado a FAST para agilizar análisis de fotogramas
+                        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
                         .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
                         .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
                         .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
@@ -372,7 +369,6 @@ public class MainActivity extends AppCompatActivity {
             }
 
             String resultadoFrame;
-            // UMBRAL ESTRICTO (< 0.12)
             if (mejorCoincidencia != null && menorDistancia < 0.12) {
                 String estado = mejorCoincidencia.getString("estado");
                 String nombre = mejorCoincidencia.getString("nombre");
@@ -382,13 +378,11 @@ public class MainActivity extends AppCompatActivity {
                 resultadoFrame = "NO_REGISTRADO|NO|NO";
             }
 
-            // APLICACIÓN DE FILTRO DE HISTORIAL TEMPORAL (Suavizado de decisiones)
             historialUltimosResultados.add(resultadoFrame);
             if (historialUltimosResultados.size() > TAMAÑO_HISTORIAL) {
                 historialUltimosResultados.remove(0);
             }
 
-            // Solo actualizamos la UI si hay consistencia en los frames analizados
             if (historialUltimosResultados.size() == TAMAÑO_HISTORIAL) {
                 String primerResultado = historialUltimosResultados.get(0);
                 boolean todosIguales = true;
@@ -530,5 +524,5 @@ public class MainActivity extends AppCompatActivity {
 }
 
 // -----------------------------------------------------------------
-// SELLO DE VALIDACIÓN Y CONTROL DE VERSIÓN: 22:05 - 30/08/2026
+// SELLO DE VALIDACIÓN Y CONTROL DE VERSIÓN: 23:26 - 30/08/2026
 // -----------------------------------------------------------------
