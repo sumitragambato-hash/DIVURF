@@ -39,6 +39,7 @@ import org.json.JSONObject;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.List;
+import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity {
     private static final int CAMERA_PERMISSION_CODE = 101;
@@ -54,6 +55,10 @@ public class MainActivity extends AppCompatActivity {
     private SharedPreferences prefs;
     private Face rostroActual = null;
     private Integer indiceEditando = null;
+
+    // SISTEMA DE HISTORIAL TEMPORAL PARA EVITAR Falsas Indecisiones (Filtro de suavizado)
+    private final List<String> historialUltimosResultados = new ArrayList<>();
+    private static const int TAMAÑO_HISTORIAL = 3; // Requiere consistencia en 3 frames consecutivos
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -144,6 +149,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void cambiarModo(boolean esRegistro) {
         modoRegistro = esRegistro;
+        historialUltimosResultados.clear();
         if (modoRegistro) {
             layoutRegistro.setVisibility(View.VISIBLE);
             layoutAlerta.setVisibility(View.GONE);
@@ -154,7 +160,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ARQUITECTURA DE FIRMA BIOMÉTRICA HIPER-ESTRICTA (Bloquea falsos positivos entre personas distintas)
     private JSONArray extraerFirmaHiperEstricta(Face face) {
         Rect box = face.getBoundingBox();
         float anchoBox = Math.max(box.width(), 1f);
@@ -165,7 +170,6 @@ public class MainActivity extends AppCompatActivity {
         JSONArray vector = new JSONArray();
 
         try {
-            // 1. Relaciones geométricas principales de alta distinción
             FaceLandmark ojoIzq = face.getLandmark(FaceLandmark.LEFT_EYE);
             FaceLandmark ojoDer = face.getLandmark(FaceLandmark.RIGHT_EYE);
             FaceLandmark nariz = face.getLandmark(FaceLandmark.NOSE_BASE);
@@ -178,16 +182,14 @@ public class MainActivity extends AppCompatActivity {
             addPuntoNormalizado(vector, bocaIzq, centroX, centroY, anchoBox, altoBox);
             addPuntoNormalizado(vector, bocaDer, centroX, centroY, anchoBox, altoBox);
 
-            // 2. Puntos clave del contorno exterior para forzar una unicidad estricta de la forma facial
             List<PointF> contornoRostro = face.getContour(FaceContour.FACE).getPoints();
-            int step = Math.max(1, contornoRostro.size() / 12); // Muestreo estratégico de contorno facial
+            int step = Math.max(1, contornoRostro.size() / 10); 
             for (int i = 0; i < contornoRostro.size(); i += step) {
                 PointF p = contornoRostro.get(i);
                 vector.put((double) (p.x - centroX) / anchoBox);
                 vector.put((double) (p.y - centroY) / altoBox);
             }
 
-            // 3. Métricas de relación estructural profunda (Ángulos y proporciones de separación)
             vector.put((double) box.width() / box.height());
             if (ojoIzq != null && ojoDer != null) {
                 float distOjos = (float) Math.hypot(ojoDer.getPosition().x - ojoIzq.getPosition().x, ojoDer.getPosition().y - ojoIzq.getPosition().y);
@@ -277,7 +279,7 @@ public class MainActivity extends AppCompatActivity {
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
 
                 FaceDetectorOptions options = new FaceDetectorOptions.Builder()
-                        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST) // Cambiado a FAST para agilizar análisis de fotogramas
                         .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
                         .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
                         .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
@@ -301,6 +303,7 @@ public class MainActivity extends AppCompatActivity {
                                         }
                                     } else {
                                         rostroActual = null;
+                                        limpiarHistorialYMostrarNoDetectado();
                                     }
                                 })
                                 .addOnFailureListener(e -> e.printStackTrace())
@@ -319,74 +322,121 @@ public class MainActivity extends AppCompatActivity {
         }, ContextCompat.getMainExecutor(this));
     }
 
-    private void buscarCoincidencia(Face face) {
+    private void limpiarHistorialYMostrarNoDetectado() {
         runOnUiThread(() -> {
-            try {
-                String dbActual = prefs.getString("usuarios", "[]");
-                JSONArray array = new JSONArray(dbActual);
+            historialUltimosResultados.clear();
+            layoutAlerta.setBackgroundColor(Color.YELLOW);
+            txtAlertaTitulo.setTextColor(Color.BLACK);
+            txtAlertaDetalle.setTextColor(Color.BLACK);
+            txtAlertaTitulo.setText("Buscando Rostro...");
+            txtAlertaDetalle.setText("Alinee su rostro frente a la cámara.");
+        });
+    }
 
-                if (array.length() == 0) {
+    private void buscarCoincidencia(Face face) {
+        try {
+            String dbActual = prefs.getString("usuarios", "[]");
+            JSONArray array = new JSONArray(dbActual);
+
+            if (array.length() == 0) {
+                runOnUiThread(() -> {
                     txtAlertaTitulo.setText("Escaneando...");
                     txtAlertaDetalle.setText("Sin rostros registrados en el sistema.");
                     layoutAlerta.setBackgroundColor(Color.LTGRAY);
-                    return;
-                }
-
-                JSONArray vectorActual = extraerFirmaHiperEstricta(face);
-
-                JSONObject mejorCoincidencia = null;
-                double menorDistancia = Double.MAX_VALUE;
-
-                for (int i = 0; i < array.length(); i++) {
-                    JSONObject obj = array.getJSONObject(i);
-                    JSONArray vectorGuardado = obj.getJSONArray("vector");
-
-                    double sumaCuadrados = 0;
-                    int length = Math.min(vectorActual.length(), vectorGuardado.length());
-                    
-                    for (int j = 0; j < length; j++) {
-                        double diff = vectorActual.getDouble(j) - vectorGuardado.getDouble(j);
-                        sumaCuadrados += diff * diff;
-                    }
-                    double distanciaEuclidiana = Math.sqrt(sumaCuadrados);
-
-                    if (distanciaEuclidiana < menorDistancia) {
-                        menorDistancia = distanciaEuclidiana;
-                        mejorCoincidencia = obj;
-                    }
-                }
-
-                // UMBRAL DE TOLERANCIA EXTREMADAMENTE BAJO (< 0.12) -> Bloquea falsos positivos y caras ajenas
-                if (mejorCoincidencia != null && menorDistancia < 0.12) {
-                    String nombre = mejorCoincidencia.getString("nombre");
-                    String cedula = mejorCoincidencia.getString("cedula");
-                    String estado = mejorCoincidencia.getString("estado");
-
-                    if ("SE BUSCA".equalsIgnoreCase(estado)) {
-                        layoutAlerta.setBackgroundColor(Color.RED);
-                        txtAlertaTitulo.setTextColor(Color.WHITE);
-                        txtAlertaDetalle.setTextColor(Color.WHITE);
-                        txtAlertaTitulo.setText("¡ALERTA: PERSONA SE BUSCA!");
-                        txtAlertaDetalle.setText("Identificado: " + nombre + "\nCédula: " + cedula);
-                    } else {
-                        layoutAlerta.setBackgroundColor(Color.GREEN);
-                        txtAlertaTitulo.setTextColor(Color.BLACK);
-                        txtAlertaDetalle.setTextColor(Color.BLACK);
-                        txtAlertaTitulo.setText("Rostro Detectado: " + estado);
-                        txtAlertaDetalle.setText("Nombre: " + nombre + "\nCédula: " + cedula);
-                    }
-                } else {
-                    layoutAlerta.setBackgroundColor(Color.YELLOW);
-                    txtAlertaTitulo.setTextColor(Color.BLACK);
-                    txtAlertaDetalle.setTextColor(Color.BLACK);
-                    txtAlertaTitulo.setText("Rostro No Registrado");
-                    txtAlertaDetalle.setText("Fuera del rango biométrico autorizado.");
-                }
-
-            } catch (Exception e) {
-                e.printStackTrace();
+                });
+                return;
             }
-        });
+
+            JSONArray vectorActual = extraerFirmaHiperEstricta(face);
+
+            JSONObject mejorCoincidencia = null;
+            double menorDistancia = Double.MAX_VALUE;
+
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject obj = array.getJSONObject(i);
+                JSONArray vectorGuardado = obj.getJSONArray("vector");
+
+                double sumaCuadrados = 0;
+                int length = Math.min(vectorActual.length(), vectorGuardado.length());
+                
+                for (int j = 0; j < length; j++) {
+                    double diff = vectorActual.getDouble(j) - vectorGuardado.getDouble(j);
+                    sumaCuadrados += diff * diff;
+                }
+                double distanciaEuclidiana = Math.sqrt(sumaCuadrados);
+
+                if (distanciaEuclidiana < menorDistancia) {
+                    menorDistancia = distanciaEuclidiana;
+                    mejorCoincidencia = obj;
+                }
+            }
+
+            String resultadoFrame;
+            // UMBRAL ESTRICTO (< 0.12)
+            if (mejorCoincidencia != null && menorDistancia < 0.12) {
+                String estado = mejorCoincidencia.getString("estado");
+                String nombre = mejorCoincidencia.getString("nombre");
+                String cedula = mejorCoincidencia.getString("cedula");
+                resultadoFrame = estado + "|" + nombre + "|" + cedula;
+            } else {
+                resultadoFrame = "NO_REGISTRADO|NO|NO";
+            }
+
+            // APLICACIÓN DE FILTRO DE HISTORIAL TEMPORAL (Suavizado de decisiones)
+            historialUltimosResultados.add(resultadoFrame);
+            if (historialUltimosResultados.size() > TAMAÑO_HISTORIAL) {
+                historialUltimosResultados.remove(0);
+            }
+
+            // Solo actualizamos la UI si hay consistencia en los frames analizados
+            if (historialUltimosResultados.size() == TAMAÑO_HISTORIAL) {
+                String primerResultado = historialUltimosResultados.get(0);
+                boolean todosIguales = true;
+                for (String res : historialUltimosResultados) {
+                    if (!res.equals(primerResultado)) {
+                        todosIguales = false;
+                        break;
+                    }
+                }
+
+                if (todosIguales) {
+                    runOnUiThread(() -> aplicarResultadoUI(primerResultado));
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void aplicarResultadoUI(String resultadoData) {
+        String[] partes = resultadoData.split("\\|");
+        String estado = partes[0];
+
+        if (estado.equals("NO_REGISTRADO")) {
+            layoutAlerta.setBackgroundColor(Color.YELLOW);
+            txtAlertaTitulo.setTextColor(Color.BLACK);
+            txtAlertaDetalle.setTextColor(Color.BLACK);
+            txtAlertaTitulo.setText("Rostro No Registrado");
+            txtAlertaDetalle.setText("Fuera del rango biométrico autorizado.");
+        } else {
+            String nombre = partes[1];
+            String cedula = partes[2];
+
+            if ("SE BUSCA".equalsIgnoreCase(estado)) {
+                layoutAlerta.setBackgroundColor(Color.RED);
+                txtAlertaTitulo.setTextColor(Color.WHITE);
+                txtAlertaDetalle.setTextColor(Color.WHITE);
+                txtAlertaTitulo.setText("¡ALERTA: PERSONA SE BUSCA!");
+                txtAlertaDetalle.setText("Identificado: " + nombre + "\nCédula: " + cedula);
+            } else {
+                layoutAlerta.setBackgroundColor(Color.GREEN);
+                txtAlertaTitulo.setTextColor(Color.BLACK);
+                txtAlertaDetalle.setTextColor(Color.BLACK);
+                txtAlertaTitulo.setText("Rostro Detectado: " + estado);
+                txtAlertaDetalle.setText("Nombre: " + nombre + "\nCédula: " + cedula);
+            }
+        }
     }
 
     private void mostrarDialogoGestionRostros() {
@@ -480,5 +530,5 @@ public class MainActivity extends AppCompatActivity {
 }
 
 // -----------------------------------------------------------------
-// SELLO DE VALIDACIÓN Y CONTROL DE VERSIÓN: 21:38 - 30/08/2026
+// SELLO DE VALIDACIÓN Y CONTROL DE VERSIÓN: 22:05 - 30/08/2026
 // -----------------------------------------------------------------
