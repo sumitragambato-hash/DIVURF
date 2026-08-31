@@ -37,6 +37,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
     private static final int CAMERA_PERMISSION_CODE = 101;
@@ -139,43 +140,67 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private double[] extraerFirmaFacial(Face face) {
+    // GENERADOR DE VECTOR BIOMÉTRICO PROFUNDO (MÁXIMA EXACTITUD DISPONIBLE)
+    private JSONArray extraerVectorProfundo(Face face) {
         Rect box = face.getBoundingBox();
         float anchoBox = Math.max(box.width(), 1f);
         float altoBox = Math.max(box.height(), 1f);
+        float centroX = box.exactCenterX();
+        float centroY = box.exactCenterY();
 
-        double distanciaOjosNorm = 0.5;
-        double narizOjoIzqNorm = 0.3;
-        double narizOjoDerNorm = 0.3;
+        JSONArray vector = new JSONArray();
 
-        FaceLandmark ojoIzq = face.getLandmark(FaceLandmark.LEFT_EYE);
-        FaceLandmark ojoDer = face.getLandmark(FaceLandmark.RIGHT_EYE);
-        FaceLandmark nariz = face.getLandmark(FaceLandmark.NOSE_BASE);
+        try {
+            // 1. Extraer puntos clave (Landmarks) normalizados respecto al centro y dimensiones de la caja
+            FaceLandmark ojoIzq = face.getLandmark(FaceLandmark.LEFT_EYE);
+            FaceLandmark ojoDer = face.getLandmark(FaceLandmark.RIGHT_EYE);
+            FaceLandmark nariz = face.getLandmark(FaceLandmark.NOSE_BASE);
+            FaceLandmark bocaIzq = face.getLandmark(FaceLandmark.MOUTH_LEFT);
+            FaceLandmark bocaDer = face.getLandmark(FaceLandmark.MOUTH_RIGHT);
 
-        if (ojoIzq != null && ojoDer != null) {
-            float distOjos = (float) Math.hypot(
-                    ojoDer.getPosition().x - ojoIzq.getPosition().x,
-                    ojoDer.getPosition().y - ojoIzq.getPosition().y
-            );
-            distanciaOjosNorm = distOjos / anchoBox;
+            addNormalizedPoint(vector, ojoIzq, centroX, centroY, anchoBox, altoBox);
+            addNormalizedPoint(vector, ojoDer, centroX, centroY, anchoBox, altoBox);
+            addNormalizedPoint(vector, nariz, centroX, centroY, anchoBox, altoBox);
+            addNormalizedPoint(vector, bocaIzq, centroX, centroY, anchoBox, altoBox);
+            addNormalizedPoint(vector, bocaDer, centroX, centroY, anchoBox, altoBox);
+
+            // 2. Extraer contornos detallados del rostro para mayor robustez biométrica
+            List<PointF> contornoRostro = face.getContour(FaceContour.FACE).getPoints();
+            for (int i = 0; i < contornoRostro.size(); i += 2) { // Muestreo optimizado de contorno
+                PointF p = contornoRostro.get(i);
+                vector.put((double) (p.x - centroX) / anchoBox);
+                vector.put((double) (p.y - centroY) / altoBox);
+            }
+
+            // 3. Añadir métricas estructurales globales (ángulos e índices de proporción)
+            vector.put((double) box.width() / box.height());
+            if (ojoIzq != null && ojoDer != null) {
+                float distOjos = (float) Math.hypot(ojoDer.getPosition().x - ojoIzq.getPosition().x, ojoDer.getPosition().y - ojoIzq.getPosition().y);
+                vector.put((double) distOjos / anchoBox);
+            } else {
+                vector.put(0.0);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
         }
 
-        if (nariz != null && ojoIzq != null && ojoDer != null) {
-            float distN1 = (float) Math.hypot(
-                    nariz.getPosition().x - ojoIzq.getPosition().x,
-                    nariz.getPosition().y - ojoIzq.getPosition().y
-            );
-            float distN2 = (float) Math.hypot(
-                    nariz.getPosition().x - ojoDer.getPosition().x,
-                    nariz.getPosition().y - ojoDer.getPosition().y
-            );
-            narizOjoIzqNorm = distN1 / altoBox;
-            narizOjoDerNorm = distN2 / altoBox;
+        return vector;
+    }
+
+    private void addNormalizedPoint(JSONArray vector, FaceLandmark landmark, float cx, float cy, float w, float h) {
+        try {
+            if (landmark != null) {
+                PointF pt = landmark.getPosition();
+                vector.put((double) (pt.x - cx) / w);
+                vector.put((double) (pt.y - cy) / h);
+            } else {
+                vector.put(0.0);
+                vector.put(0.0);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-
-        double ratioCaja = (double) box.width() / box.height();
-
-        return new double[]{distanciaOjosNorm, narizOjoIzqNorm, narizOjoDerNorm, ratioCaja};
     }
 
     private void guardarPersona() {
@@ -197,21 +222,18 @@ public class MainActivity extends AppCompatActivity {
             String dbActual = prefs.getString("usuarios", "[]");
             JSONArray array = new JSONArray(dbActual);
             
-            double[] firma = extraerFirmaFacial(rostroActual);
+            JSONArray vectorBiometrico = extraerVectorProfundo(rostroActual);
 
             JSONObject nuevoRostro = new JSONObject();
             nuevoRostro.put("nombre", nombre);
             nuevoRostro.put("cedula", cedula);
             nuevoRostro.put("estado", estado);
-            nuevoRostro.put("f0", firma[0]);
-            nuevoRostro.put("f1", firma[1]);
-            nuevoRostro.put("f2", firma[2]);
-            nuevoRostro.put("f3", firma[3]);
+            nuevoRostro.put("vector", vectorBiometrico);
             
             array.put(nuevoRostro);
             prefs.edit().putString("usuarios", array.toString()).apply();
 
-            Toast.makeText(this, "Rostro de " + nombre + " registrado con alta precisión", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Rostro de " + nombre + " registrado con alta precisión biométrica", Toast.LENGTH_LONG).show();
             inputNombre.setText("");
             inputCedula.setText("");
             cambiarModo(false);
@@ -231,10 +253,11 @@ public class MainActivity extends AppCompatActivity {
 
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
 
-                // Configuramos ML Kit con soporte de Landmarks para máxima precisión
+                // Activación total de Contornos y Puntos de referencia de alta precisión de ML Kit
                 FaceDetectorOptions options = new FaceDetectorOptions.Builder()
                         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
                         .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                        .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
                         .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
                         .build();
                 FaceDetector detector = FaceDetection.getClient(options);
@@ -287,34 +310,33 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
 
-                double[] firmaActual = extraerFirmaFacial(face);
+                JSONArray vectorActual = extraerVectorProfundo(face);
 
                 JSONObject mejorCoincidencia = null;
                 double menorDiferencia = Double.MAX_VALUE;
 
                 for (int i = 0; i < array.length(); i++) {
                     JSONObject obj = array.getJSONObject(i);
-                    double f0 = obj.getDouble("f0");
-                    double f1 = obj.getDouble("f1");
-                    double f2 = obj.getDouble("f2");
-                    double f3 = obj.getDouble("f3");
+                    JSONArray vectorGuardado = obj.getJSONArray("vector");
 
-                    // Distancia Euclidiana de los rasgos faciales
-                    double dif = Math.sqrt(
-                            Math.pow(f0 - firmaActual[0], 2) +
-                            Math.pow(f1 - firmaActual[1], 2) +
-                            Math.pow(f2 - firmaActual[2], 2) +
-                            Math.pow(f3 - firmaActual[3], 2)
-                    );
+                    // Cálculo por Distancia Euclidiana Vectorial Completa
+                    double sumaCuadrados = 0;
+                    int length = Math.min(vectorActual.length(), vectorGuardado.length());
+                    
+                    for (int j = 0; j < length; j++) {
+                        double diff = vectorActual.getDouble(j) - vectorGuardado.getDouble(j);
+                        sumaCuadrados += diff * diff;
+                    }
+                    double distanciaVectorial = Math.sqrt(sumaCuadrados);
 
-                    if (dif < menorDiferencia) {
-                        menorDiferencia = dif;
+                    if (distanciaVectorial < menorDiferencia) {
+                        menorDiferencia = distanciaVectorial;
                         mejorCoincidencia = obj;
                     }
                 }
 
-                // Umbral de tolerancia estricto para evitar el loop
-                if (mejorCoincidencia != null && menorDiferencia < 0.35) {
+                // UMBRAL MATEMÁTICO RIGUROSO: Si la diferencia supera este límite, se rechaza por completo
+                if (mejorCoincidencia != null && menorDiferencia < 0.25) {
                     String nombre = mejorCoincidencia.getString("nombre");
                     String cedula = mejorCoincidencia.getString("cedula");
                     String estado = mejorCoincidencia.getString("estado");
@@ -336,8 +358,8 @@ public class MainActivity extends AppCompatActivity {
                     layoutAlerta.setBackgroundColor(Color.YELLOW);
                     txtAlertaTitulo.setTextColor(Color.BLACK);
                     txtAlertaDetalle.setTextColor(Color.BLACK);
-                    txtAlertaTitulo.setText("Buscando coincidencia...");
-                    txtAlertaDetalle.setText("Acérquese o mantenga el rostro fijo.");
+                    txtAlertaTitulo.setText("Rostro no reconocido");
+                    txtAlertaDetalle.setText("Fuera del umbral de coincidencia biométrica.");
                 }
 
             } catch (Exception e) {
